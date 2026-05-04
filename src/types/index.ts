@@ -22,7 +22,6 @@ export interface Candidate {
   status: AcquisitionStatus;
   kodePerisai: string;
   picMagang: string;
-  // Data untuk generate dokumen
   noKTP: string;
   noKPJ: string;
   rekening: string;
@@ -31,7 +30,6 @@ export interface Candidate {
   tempatTglLahir: string;
   alamat: string;
   kelDesa: string;
-  // Nama & jabatan penanda tangan wadah & cabang
   namaWadah: string;
   jabatanWadah: string;
   namaCabang: string;
@@ -45,7 +43,11 @@ export interface Candidate {
     lembarQuiz: boolean;
     materai: boolean;
     pasPhoto: boolean;
-    kumpulanBerkas: string;
+    // Kolom baru: URL langsung per file
+    ttdUrl: string;      // col[23] — URL file ttd_calon
+    materaiUrl: string;  // col[24] — URL file materai
+    dokumenUrl: string;  // col[25] — URL file dokumen.pdf
+    kumpulanBerkas: string; // col[26] — folder GDrive (untuk merge)
   };
   readyToPrint: {
     form: boolean;

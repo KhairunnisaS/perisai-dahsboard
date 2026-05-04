@@ -20,7 +20,7 @@ function parseBool(raw: string): boolean {
 
 function formatPhone(raw: string): string {
   if (!raw) return "";
-  const cleaned = raw.replace(/\.0$/, "").replace(/\D/g, "");
+  const cleaned = raw.replace(/\s+/g, "").replace(/\.0$/, "").replace(/\D/g, "");
   if (!cleaned) return "";
   if (cleaned.startsWith("8")) return "0" + cleaned;
   return cleaned;
@@ -32,11 +32,13 @@ function formatNumber(raw: string): string {
 }
 
 function fixRomanInText(text: string): string {
-  return text.replace(/\b([ivxlcdm]+)\b/gi, (match) => {
+  return text.replace(/\b([ivxlcdmIVXLCDM]+)\b/g, (match) => {
     const upper = match.toUpperCase();
-    return /^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/.test(upper)
-      ? upper
-      : match;
+    if (
+      /^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/.test(upper) &&
+      upper.length > 0
+    ) return upper;
+    return match;
   });
 }
 
@@ -60,23 +62,32 @@ function rowToCandidate(row: Row): Candidate | null {
   const displayName      = namaCalonPerisai || namaKepling;
   const isMitra          = !!namaCalonPerisai && namaCalonPerisai.trim() !== namaKepling.trim();
 
-  // ── Boolean dokumen ────────────────────────────────────────
-  // col[8]  FORMULIR PERISAI
-  // col[9]  KTP
-  // col[11] KPJ (BPU)
-  // col[15] IJAZAH
-  // col[16] LEMBAR QUIZ
-  // col[17] MATERAI
-  // col[22] PAS PHOTO
-  const formulirPerisaiBool = parseBool(cell(row, 8));
-  const ktp                 = parseBool(cell(row, 9));
-  const kpj                 = parseBool(cell(row, 11));
-  const ijazah              = parseBool(cell(row, 15));
-  const lembarQuiz          = parseBool(cell(row, 16));
-  const materai             = parseBool(cell(row, 17));
-  const pasPhoto            = parseBool(cell(row, 22));
+  // Kolom mapping (sheet terbaru):
+  // [0]  NO              [1]  KODE          [2]  KECAMATAN
+  // [3]  KELURAHAN       [4]  LINGKUNGAN    [5]  NAMA KEPLING
+  // [6]  NO HP kepling   [7]  NAMA CALON PERISAI
+  // [8]  FORMULIR        [9]  KTP           [10] No NIK KTP
+  // [11] KPJ bool        [12] No KPJ        [13] Rekening
+  // [14] No Rekening     [15] IJAZAH        [16] LEMBAR QUIZ
+  // [17] MATERAI (bool)  [18] EMAIL         [19] No HP calon
+  // [20] Tempat tgl lahir [21] ALAMAT
+  // [22] PAS PHOTO
+  // [23] TTD URL         ← URL langsung file ttd_calon
+  // [24] MATERAI URL     ← URL langsung file materai
+  // [25] DOKUMEN URL     ← URL langsung file dokumen.pdf
+  // [26] KUMPULAN SEMUA BERKAS ← URL folder GDrive (untuk merge)
+  // [27] PIC MAGANG
+  // [36] KODE PERISAI   (kolom AK)
 
-  // ── Data teks ──────────────────────────────────────────────
+  const formulirPerisaiBool = parseBool(cell(row, 8));
+  const ktp       = parseBool(cell(row, 9));
+  const kpj       = parseBool(cell(row, 11));
+  const ijazah    = parseBool(cell(row, 15));
+  const lembarQuiz = parseBool(cell(row, 16));
+  const materaiBool = parseBool(cell(row, 17));
+  const pasPhotoRaw = cell(row, 22);
+  const pasPhoto  = parseBool(pasPhotoRaw) || (!!pasPhotoRaw && pasPhotoRaw.toLowerCase() !== "false");
+
   const noNikKtp       = cell(row, 10);
   const noKpj          = formatNumber(cell(row, 12));
   const rekening       = cell(row, 13);
@@ -87,80 +98,61 @@ function rowToCandidate(row: Row): Candidate | null {
   const phone          = noHpCalon || noHpKepling;
   const tempatTglLahir = cell(row, 20);
   const alamat         = fixRomanInText(cell(row, 21));
-  // col[3] = KELURAHAN/KEL DESA (dipakai sebagai subDistrict sekaligus kelDesa)
-  const kelDesa        = cell(row, 3);
-  // col[2] = KECAMATAN
+  const kelDesa        = cell(row, 3).trim();
   const kecamatan      = cell(row, 2).trim();
-  const kumpulanBerkas = cell(row, 23);  // KUMPULAN SEMUA BERKAS
-  const picMagang      = cell(row, 24);  // PIC MAGANG
 
-  // Kode perisai — col[33]
-  const kodePerisai    = cell(row, 33);
+  // URL langsung per file
+  const ttdUrl      = cell(row, 23);  // URL ttd_calon
+  const materaiUrl  = cell(row, 24);  // URL materai
+  const dokumenUrl  = cell(row, 25);  // URL dokumen.pdf
+  const kumpulanBerkas = cell(row, 25); // Folder GDrive
+  const picMagang   = cell(row, 27);
+
+  // Kode perisai
+  const kodePerisai    = cell(row, 36);
   const hasPerisaiCode = kodePerisai.length > 2 && /^[A-Z]{2}\d+/.test(kodePerisai);
 
-  // ── Syarat ready to print ──────────────────────────────────
-  // Syarat FORM & PKS:
-  //   - Nama calon perisai (atau nama kepling jika tidak mitra)
-  //   - NIK KTP
-  //   - Alamat
-  //   - No HP
-  //   - Email
-  //   - Link GDrive (untuk ambil ttd_calon.png dan materai.png)
-  // Catatan: kabupaten/kota = "MEDAN" (fix), kodePos akan di-lookup otomatis dari API
-  const namaUntukDokumen = namaCalonPerisai || namaKepling;
-  const hasFolderGDrive  = kumpulanBerkas.startsWith("http");
+  // Syarat FORM: nama + NIK + HP + email + alamat + TTD url
+  const hasDataForm = !!(displayName && noNikKtp && phone && email && alamat && ttdUrl.startsWith("http"));
 
-  const hasDataDokumen = !!(
-    namaUntukDokumen &&
-    noNikKtp &&
-    alamat &&
-    phone &&
-    email &&
-    hasFolderGDrive   // ttd_calon.png & materai.png diambil dari sini
-  );
+  // Syarat PKS: sama dengan form + materai url
+  const hasDataPKS = hasDataForm && materaiUrl.startsWith("http");
 
-  // Form butuh kelDesa untuk lookup kodepos (opsional, tidak blokir)
-  // Syarat form = sama dengan PKS (kodepos bisa lookup atau kosong)
-  const readyForm = hasDataDokumen;
-  const readyPKS  = hasDataDokumen;
-
-  // Exam: lembarQuiz TRUE = sudah ikut ujian & ada di sheet exam
+  // Exam: hanya jika LEMBAR QUIZ = TRUE
   const readyExam = lembarQuiz;
 
-  // ── Status ─────────────────────────────────────────────────
   let status: Candidate["status"] = "pending";
   if (hasPerisaiCode) {
     status = "active";
-  } else if (formulirPerisaiBool && ktp && kpj && ijazah && lembarQuiz && materai && pasPhoto) {
+  } else if (formulirPerisaiBool && ktp && kpj && ijazah && lembarQuiz && materaiBool && pasPhoto) {
     status = "completed";
   }
 
   return {
-    id:              kode || namaKepling,
-    name:            displayName,
+    id:               kode || namaKepling,
+    name:             displayName,
     namaKepling,
     namaCalonPerisai: namaCalonPerisai || undefined,
     isMitra,
-    neighborhood:    cell(row, 4),
-    subDistrict:     kelDesa,       // kelurahan sebagai subDistrict untuk tab
+    neighborhood:     cell(row, 4),
+    subDistrict:      kelDesa,
     kecamatan,
     phone,
     status,
-    kodePerisai:     hasPerisaiCode ? kodePerisai : "",
+    kodePerisai:      hasPerisaiCode ? kodePerisai : "",
     picMagang,
-    noKTP:           noNikKtp,
-    noKPJ:           noKpj,
+    noKTP:            noNikKtp,
+    noKPJ:            noKpj,
     rekening,
     noRekening,
     email,
     tempatTglLahir,
     alamat,
     kelDesa,
-    // Ketetapan tetap — Nama & Jabatan Wadah & Cabang
-    namaWadah:       "HERDIANA SIMBOLON",
-    jabatanWadah:    "KETUA WADAH",
-    namaCabang:      "SAKINAH RAMZA",
-    jabatanCabang:   "ARK",
+    namaWadah:        "HERDIANA SIMBOLON",
+    jabatanWadah:     "KETUA WADAH",
+    namaCabang:       "SAKINAH RAMZA",
+    jabatanCabang:    "ARK",
     documents: {
       formulirPerisai: formulirPerisaiBool,
       ktp,
@@ -168,13 +160,16 @@ function rowToCandidate(row: Row): Candidate | null {
       rekening:        !!rekening && rekening !== "Belum ada",
       ijazah,
       lembarQuiz,
-      materai,
+      materai:         materaiBool,
       pasPhoto,
+      ttdUrl,
+      materaiUrl,
+      dokumenUrl,
       kumpulanBerkas,
     },
     readyToPrint: {
-      form: readyForm,
-      pks:  readyPKS,
+      form: hasDataForm,
+      pks:  hasDataPKS,
       exam: readyExam,
     },
     assignedOfficerId: picMagang,
@@ -187,7 +182,6 @@ function computeStats(candidates: Candidate[]): ProjectMeta["stats"] {
   const total   = candidates.length;
   const active  = candidates.filter((c) => c.status === "active").length;
   const pending = total - active;
-
   const kelurahanSet = new Set(candidates.map((c) => c.subDistrict));
   const totalAreas   = kelurahanSet.size;
   let areasCompleted = 0;
@@ -195,32 +189,16 @@ function computeStats(candidates: Candidate[]): ProjectMeta["stats"] {
     const inKel = candidates.filter((c) => c.subDistrict === kel);
     if (inKel.length > 0 && inKel.every((c) => c.status === "active")) areasCompleted++;
   });
-
-  return {
-    totalCandidates:   total,
-    activePerisai:     active,
-    pendingCandidates: pending,
-    areasCompleted,
-    totalAreas,
-    acquisitionRate:   total > 0 ? Math.round((active / total) * 100) : 0,
-  };
+  return { totalCandidates: total, activePerisai: active, pendingCandidates: pending, areasCompleted, totalAreas, acquisitionRate: total > 0 ? Math.round((active / total) * 100) : 0 };
 }
 
 function extractOfficers(rows: Row[]): FieldOfficer[] {
   const map = new Map<string, FieldOfficer>();
   rows.forEach((row) => {
-    const pic  = cell(row, 24);
+    const pic  = cell(row, 27);
     const zone = cell(row, 3);
     if (!pic) return;
-    if (!map.has(pic)) {
-      map.set(pic, {
-        id:            pic,
-        name:          pic,
-        subDistrict:   zone,
-        assignedZones: [],
-        contact:       formatPhone(cell(row, 6)),
-      });
-    }
+    if (!map.has(pic)) map.set(pic, { id: pic, name: pic, subDistrict: zone, assignedZones: [], contact: formatPhone(cell(row, 6)) });
     const o = map.get(pic)!;
     if (zone && !o.assignedZones.includes(zone)) o.assignedZones.push(zone);
   });
@@ -230,48 +208,34 @@ function extractOfficers(rows: Row[]): FieldOfficer[] {
 export async function fetchKecamatanList(config: SheetsConfig): Promise<string[]> {
   const rows = await fetchRange(config, "Sheet1!A:C");
   const set  = new Set<string>();
-  rows.forEach((row) => {
-    const k = cell(row, 2).trim();
-    if (k) set.add(k);
-  });
+  rows.forEach((row) => { const k = cell(row, 2).trim(); if (k) set.add(k); });
   return Array.from(set).sort();
 }
 
-export async function fetchCandidates(
-  config: SheetsConfig,
-  kecamatan?: string
-): Promise<Candidate[]> {
-  const rows = await fetchRange(config, "Sheet1!A:AJ");
+export async function fetchCandidates(config: SheetsConfig, kecamatan?: string): Promise<Candidate[]> {
+  const rows = await fetchRange(config, "Sheet1!A:AM");
   const all  = rows.map(rowToCandidate).filter((c): c is Candidate => c !== null);
   if (!kecamatan) return all;
   return all.filter((c) => c.kecamatan.toLowerCase() === kecamatan.toLowerCase());
 }
 
-export async function fetchProjectMeta(
-  config: SheetsConfig,
-  kecamatan?: string
-): Promise<ProjectMeta> {
-  const rows = await fetchRange(config, "Sheet1!A:AJ");
-  const all  = rows.map(rowToCandidate).filter((c): c is Candidate => c !== null);
-  const candidates   = kecamatan
-    ? all.filter((c) => c.kecamatan.toLowerCase() === kecamatan.toLowerCase())
-    : all;
-  const filteredRows = kecamatan
-    ? rows.filter((r) => cell(r, 2).trim().toLowerCase() === kecamatan.toLowerCase())
-    : rows;
-
+export async function fetchProjectMeta(config: SheetsConfig, kecamatan?: string): Promise<ProjectMeta> {
+  const rows         = await fetchRange(config, "Sheet1!A:AM");
+  const all          = rows.map(rowToCandidate).filter((c): c is Candidate => c !== null);
+  const candidates   = kecamatan ? all.filter((c) => c.kecamatan.toLowerCase() === kecamatan.toLowerCase()) : all;
+  const filteredRows = kecamatan ? rows.filter((r) => cell(r, 2).trim().toLowerCase() === kecamatan.toLowerCase()) : rows;
   return {
-    id:          "perisai-1",
-    title:       `Perisai Agent Acquisition${kecamatan ? ` - ${kecamatan}` : ""}`,
+    id: "perisai-1",
+    title: `Perisai Agent Acquisition${kecamatan ? ` - ${kecamatan}` : ""}`,
     description: "Monitoring and managing perisai agent recruitment progress",
-    district:    kecamatan ?? "",
-    status:      "active",
-    stats:       computeStats(candidates),
+    district: kecamatan ?? "",
+    status: "active",
+    stats: computeStats(candidates),
     fieldOfficers: extractOfficers(filteredRows),
   };
 }
 
 export async function fetchOfficers(config: SheetsConfig): Promise<FieldOfficer[]> {
-  const rows = await fetchRange(config, "Sheet1!A:AJ");
+  const rows = await fetchRange(config, "Sheet1!A:AM");
   return extractOfficers(rows);
 }
